@@ -1,8 +1,11 @@
 export type ChantStatus = "idle" | "chanting" | "paused";
+export type ChantMode = "recording" | "synth";
 
 export type ChantSnapshot = {
   status: ChantStatus;
-  mode: "synth" | "file";
+  mode: ChantMode;
+  /** โหลดไฟล์เสียงสวดจริงได้หรือไม่ (ถ้าไม่ได้จะใช้เสียงสังเคราะห์อย่างเดียว) */
+  recordingAvailable: boolean;
   section: number;
   line: number;
   /** คำที่กำลังสวด: -1 = ยังไม่เริ่มบรรทัด, >= จำนวนคำ = จบบรรทัดแล้ว */
@@ -11,7 +14,8 @@ export type ChantSnapshot = {
 
 let snapshot: ChantSnapshot = {
   status: "idle",
-  mode: "synth",
+  mode: "recording",
+  recordingAvailable: true,
   section: 0,
   line: 0,
   word: -1,

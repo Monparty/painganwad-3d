@@ -1,9 +1,12 @@
 import * as THREE from "three";
 import { CHANTS } from "./chants";
-import { audioLevel, chantStore } from "./store";
+import { RECORDING } from "./recording";
+import { audioLevel, chantStore, type ChantMode } from "./store";
 
-// เสียงสวดสังเคราะห์ด้วย formant synthesis: พระหลายรูปสวดพร้อมกันเสียงทุ้มต่ำ
-// ถ้ามีไฟล์ public/audio/chant.mp3 จะเล่นไฟล์นั้นแทน
+// ระบบเสียงในโบสถ์ มีเสียงสวด 2 แบบ:
+// - "recording": เสียงพระสวดจริงจากไฟล์ (stream ผ่าน <audio> ไม่ decode ทั้งไฟล์)
+// - "synth": เสียงสังเคราะห์แบบ formant พร้อมคำบรรยายไฮไลต์ทีละคำ
+// ทั้งสองแบบเข้า chantBus เดียวกัน → เสียงรอบทิศ (PositionalAudio), เสียงก้อง และขยับปากพระ
 
 const F0 = 112;
 const SHORT = 0.24;
@@ -11,7 +14,8 @@ const LONG = 0.43;
 const LINE_GAP = 0.55;
 const SECTION_GAP = 4.2;
 const CHANT_LEVEL = 0.9;
-const FILE_URL = "/audio/chant.mp3";
+const INTRO_DELAY = 5000;
+const RECORDING_LOOP_GAP = 5000;
 
 type Formant = [number, number, number];
 
@@ -109,18 +113,19 @@ const PARSED = CHANTS.map((sec) =>
 
 function makeImpulse(ctx: BaseAudioContext, seconds: number, decay: number) {
   const len = Math.floor(ctx.sampleRate * seconds);
+  const preDelay = Math.floor(ctx.sampleRate * 0.012);
   const buf = ctx.createBuffer(2, len, ctx.sampleRate);
   for (let ch = 0; ch < 2; ch++) {
     const data = buf.getChannelData(ch);
     let lp = 0;
-    for (let i = 0; i < len; i++) {
+    for (let i = preDelay; i < len; i++) {
       const x = i / len;
       lp += (Math.random() * 2 - 1 - lp) * (0.9 - 0.75 * x);
       data[i] = lp * Math.pow(1 - x, decay);
     }
-    for (const ms of [11, 23, 37, 52, 71]) {
+    for (const ms of [11, 23, 37, 52, 71, 96]) {
       const k = Math.floor((ctx.sampleRate * ms) / 1000) + ch * 7;
-      data[k] += (Math.random() > 0.5 ? 1 : -1) * 0.5 * (1 - ms / 90);
+      data[k] += (Math.random() > 0.5 ? 1 : -1) * 0.5 * (1 - ms / 120);
     }
   }
   return buf;
@@ -141,7 +146,24 @@ function makeNoise(ctx: BaseAudioContext, seconds: number, brown = false) {
   return buf;
 }
 
-type Voice = { osc: OscillatorNode; gain: GainNode; ratio: number; level: number };
+/** คลื่นเส้นเสียง: ฮาร์มอนิกลดหลั่นนุ่มกว่า sawtooth */
+function glottalWave(ctx: BaseAudioContext) {
+  const n = 48;
+  const real = new Float32Array(n);
+  const imag = new Float32Array(n);
+  for (let k = 1; k < n; k++) imag[k] = Math.pow(k, -1.2) * (k % 2 === 0 ? 0.85 : 1);
+  return ctx.createPeriodicWave(real, imag);
+}
+
+type Voice = {
+  osc: OscillatorNode;
+  gain: GainNode;
+  env: GainNode;
+  ratio: number;
+  level: number;
+  /** หน่วงเวลาเข้า/ออกพยางค์ของพระรูปนี้ (วินาที) สุ่มใหม่ทุกบรรทัด */
+  lag: number;
+};
 type WordEntry = {
   t0: number;
   t1: number;
@@ -164,13 +186,15 @@ export class ChantEngine {
   private readonly bellBus: GainNode;
   private readonly analyser: AnalyserNode;
   private readonly levelData = new Float32Array(512);
-  private readonly env: GainNode;
   private readonly noiseGain: GainNode;
   private readonly noiseFilter: BiquadFilterNode;
   private readonly noiseBuffer: AudioBuffer;
   private readonly voices: Voice[] = [];
   private readonly formants: { filter: BiquadFilterNode; gain: GainNode }[] = [];
+  private readonly audio: HTMLAudioElement;
+  private readonly recordingGain: GainNode;
 
+  private mode: ChantMode = "recording";
   private words: WordEntry[] = [];
   private lines: LineEntry[] = [];
   private cursor = { section: 0, line: 0 };
@@ -178,11 +202,8 @@ export class ChantEngine {
   private running = false;
   private started = false;
   private pumpTimer: ReturnType<typeof setInterval> | null = null;
+  private recordingTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingSources: { t: number; node: AudioScheduledSourceNode }[] = [];
-  private fileBuffer: AudioBuffer | null = null;
-  private fileSource: AudioBufferSourceNode | null = null;
-  private fileStartedAt = 0;
-  private fileOffset = 0;
 
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
@@ -220,19 +241,29 @@ export class ChantEngine {
     this.bellBus.connect(this.ambientOut);
     this.bellBus.connect(this.reverbSend);
 
-    // แหล่งเสียงจากลำคอ → กรองโทนให้นุ่ม → formant ขนาน 3 ตัว + เสียงก้องอก
+    // ---------- เสียงสวดจริง ----------
+    this.audio = new Audio();
+    this.audio.preload = "auto";
+    this.audio.src = RECORDING.src;
+    this.audio.addEventListener("error", () => this.recordingFailed());
+    this.audio.addEventListener("ended", this.onRecordingEnded);
+    this.recordingGain = ctx.createGain();
+    this.recordingGain.gain.value = 0;
+    ctx.createMediaElementSource(this.audio).connect(this.recordingGain);
+    this.recordingGain.connect(this.chantBus);
+
+    // ---------- เสียงสังเคราะห์ ----------
+    // พระแต่ละรูป: เส้นเสียง → ระดับเสียง → envelope ของตัวเอง → รวม → กรองโทน → formant
     const voiceMix = ctx.createGain();
     voiceMix.gain.value = 0.22;
     const tilt = ctx.createBiquadFilter();
     tilt.type = "lowpass";
-    tilt.frequency.value = 2600;
+    tilt.frequency.value = 2800;
     tilt.Q.value = 0.3;
     voiceMix.connect(tilt);
 
-    this.env = ctx.createGain();
-    this.env.gain.value = 0;
-    this.env.connect(this.chantBus);
-
+    const synthBus = ctx.createGain();
+    synthBus.connect(this.chantBus);
     for (let k = 0; k < 3; k++) {
       const filter = ctx.createBiquadFilter();
       filter.type = "bandpass";
@@ -242,9 +273,20 @@ export class ChantEngine {
       gain.gain.value = FORMANT_AMP[k];
       tilt.connect(filter);
       filter.connect(gain);
-      gain.connect(this.env);
+      gain.connect(synthBus);
       this.formants.push({ filter, gain });
     }
+    // ย่านเสียงกังวาน ~3.2kHz ทำให้เสียงสวดมีมิติขึ้น
+    const ring = ctx.createBiquadFilter();
+    ring.type = "bandpass";
+    ring.frequency.value = 3200;
+    ring.Q.value = 8;
+    const ringGain = ctx.createGain();
+    ringGain.gain.value = 0.55;
+    tilt.connect(ring);
+    ring.connect(ringGain);
+    ringGain.connect(synthBus);
+    // เสียงก้องอก
     const body = ctx.createBiquadFilter();
     body.type = "lowpass";
     body.frequency.value = 380;
@@ -252,9 +294,10 @@ export class ChantEngine {
     bodyGain.gain.value = 0.35;
     tilt.connect(body);
     body.connect(bodyGain);
-    bodyGain.connect(this.env);
+    bodyGain.connect(synthBus);
 
     // เสียงที่ 0 คือพระผู้นำสวด ที่เหลือคือพระที่สวดตาม (เพี้ยนกันเล็กน้อยให้เป็นหมู่)
+    const wave = glottalWave(ctx);
     const voiceDefs: [cents: number, level: number][] = [
       [0, 1],
       [-9, 0.75],
@@ -266,12 +309,15 @@ export class ChantEngine {
     for (const [cents, level] of voiceDefs) {
       const ratio = Math.pow(2, cents / 1200);
       const osc = ctx.createOscillator();
-      osc.type = "sawtooth";
+      osc.setPeriodicWave(wave);
       osc.frequency.value = F0 * ratio;
       const gain = ctx.createGain();
       gain.gain.value = level;
+      const env = ctx.createGain();
+      env.gain.value = 0;
       osc.connect(gain);
-      gain.connect(voiceMix);
+      gain.connect(env);
+      env.connect(voiceMix);
 
       for (const [rate, depth] of [
         [4.4 + Math.random() * 1.2, 0.006],
@@ -286,11 +332,27 @@ export class ChantEngine {
         lfo.start();
       }
       osc.start();
-      this.voices.push({ osc, gain, ratio, level });
+      this.voices.push({ osc, gain, env, ratio, level, lag: 0 });
     }
 
-    // สัญญาณรบกวนสำหรับเสียงพยัญชนะ (ส, ห, เสียงระเบิด)
     this.noiseBuffer = makeNoise(ctx, 2);
+
+    // ลมหายใจผ่านช่องเสียง (เข้า envelope ของพระผู้นำ จึงดังตามพยางค์)
+    const breath = ctx.createBufferSource();
+    breath.buffer = this.noiseBuffer;
+    breath.loop = true;
+    const breathFilter = ctx.createBiquadFilter();
+    breathFilter.type = "bandpass";
+    breathFilter.frequency.value = 1800;
+    breathFilter.Q.value = 0.6;
+    const breathGain = ctx.createGain();
+    breathGain.gain.value = 0.05;
+    breath.connect(breathFilter);
+    breathFilter.connect(breathGain);
+    breathGain.connect(this.voices[0].env);
+    breath.start();
+
+    // สัญญาณรบกวนสำหรับเสียงพยัญชนะ (ส, ห, เสียงระเบิด)
     const noise = ctx.createBufferSource();
     noise.buffer = this.noiseBuffer;
     noise.loop = true;
@@ -301,7 +363,7 @@ export class ChantEngine {
     this.noiseGain.gain.value = 0;
     noise.connect(this.noiseFilter);
     this.noiseFilter.connect(this.noiseGain);
-    this.noiseGain.connect(this.chantBus);
+    this.noiseGain.connect(synthBus);
     noise.start();
 
     // เสียงห้องโถงเบาๆ
@@ -323,34 +385,48 @@ export class ChantEngine {
     return this.running;
   }
 
+  /** เรียกจาก click ของผู้ใช้โดยตรง (ต้องอยู่ใน user gesture เพื่อปลดล็อกเสียง) */
   start() {
     if (this.started) return;
     this.started = true;
     void this.ctx.resume();
+    // ปลดล็อก <audio> บน iOS: play ภายใน gesture แล้วหยุดทันที
+    const a = this.audio;
+    a.muted = true;
+    a.play()
+      .then(() => {
+        a.pause();
+        a.currentTime = 0;
+      })
+      .catch(() => {})
+      .finally(() => {
+        a.muted = false;
+      });
+
     const now = this.ctx.currentTime;
     this.ringBell(now + 0.4, 1);
     this.ringBell(now + 3.2, 0.7);
     this.scheduleBirds();
     this.loop();
-    void this.loadFile().then((buf) => {
-      if (buf) {
-        this.fileBuffer = buf;
-        this.reverbSend.gain.value = 0.25;
-        chantStore.set({ mode: "file" });
-      }
-      this.nextTime = Math.max(this.ctx.currentTime + 0.5, now + 5.5);
-      this.resume();
-    });
+    setTimeout(() => {
+      if (chantStore.get().status === "idle") this.resume();
+    }, INTRO_DELAY);
   }
 
   resume() {
     if (this.running || !this.started) return;
     void this.ctx.resume();
     this.running = true;
-    this.nextTime = Math.max(this.nextTime, this.ctx.currentTime + 0.35);
-    if (this.fileBuffer) {
-      this.playFile(this.nextTime);
+    // ไฟล์จริงมีเสียงก้องของโบสถ์อยู่แล้ว จึงเติมเสียงก้องน้อยกว่าเสียงสังเคราะห์
+    this.reverbSend.gain.setTargetAtTime(this.mode === "recording" ? 0.22 : 0.55, this.ctx.currentTime, 0.2);
+    if (this.mode === "recording") {
+      this.clearRecordingTimer();
+      this.fadeRecording(1, 0.4);
+      this.audio.play().catch((e: DOMException) => {
+        if (e.name === "NotSupportedError") this.recordingFailed();
+      });
     } else {
+      this.nextTime = Math.max(this.nextTime, this.ctx.currentTime + 0.35);
       this.pump();
       this.pumpTimer = setInterval(this.pump, 100);
     }
@@ -360,16 +436,76 @@ export class ChantEngine {
   pause() {
     if (!this.running) return;
     this.running = false;
+    if (this.mode === "recording") {
+      this.clearRecordingTimer();
+      this.fadeRecording(0, 0.12);
+      this.recordingTimer = setTimeout(() => this.audio.pause(), 450);
+    } else {
+      this.pauseSynth();
+    }
+    chantStore.set({ status: "paused" });
+  }
+
+  toggle() {
+    if (this.running) this.pause();
+    else this.resume();
+  }
+
+  setMode(mode: ChantMode) {
+    if (mode === this.mode) return;
+    if (mode === "recording" && !chantStore.get().recordingAvailable) return;
+    const wasRunning = this.running;
+    if (wasRunning) this.pause();
+    this.mode = mode;
+    chantStore.set({ mode });
+    if (wasRunning) this.resume();
+  }
+
+  setVolume(v: number) {
+    const now = this.ctx.currentTime;
+    this.chantOut.gain.setTargetAtTime(CHANT_LEVEL * v, now, 0.1);
+    this.ambientOut.gain.setTargetAtTime(v, now, 0.1);
+  }
+
+  // ---------- เสียงสวดจริง ----------
+
+  private fadeRecording(target: number, tau: number) {
+    const g = this.recordingGain.gain;
+    const now = this.ctx.currentTime;
+    g.cancelScheduledValues(now);
+    g.setTargetAtTime(target, now, tau);
+  }
+
+  private clearRecordingTimer() {
+    if (this.recordingTimer) clearTimeout(this.recordingTimer);
+    this.recordingTimer = null;
+  }
+
+  /** จบไฟล์ → ตีระฆัง เว้นช่วง แล้วสวดใหม่ตั้งแต่ต้น */
+  private onRecordingEnded = () => {
+    if (!this.running || this.mode !== "recording") return;
+    this.ringBell(this.ctx.currentTime + 0.5, 0.9);
+    this.recordingTimer = setTimeout(() => {
+      this.audio.currentTime = 0;
+      if (this.running && this.mode === "recording") void this.audio.play().catch(() => {});
+    }, RECORDING_LOOP_GAP);
+  };
+
+  private recordingFailed() {
+    if (!chantStore.get().recordingAvailable) return;
+    const wasRunning = this.running && this.mode === "recording";
+    if (wasRunning) this.pause();
+    this.mode = "synth";
+    chantStore.set({ recordingAvailable: false, mode: "synth" });
+    if (wasRunning) this.resume();
+  }
+
+  // ---------- เสียงสังเคราะห์ ----------
+
+  private pauseSynth() {
     if (this.pumpTimer) clearInterval(this.pumpTimer);
     this.pumpTimer = null;
     const now = this.ctx.currentTime;
-
-    if (this.fileSource && this.fileBuffer) {
-      this.fileOffset += Math.max(0, now - this.fileStartedAt);
-      this.fileSource.stop();
-      this.fileSource.disconnect();
-      this.fileSource = null;
-    }
 
     // สวดต่อจากบรรทัดที่ยังสวดไม่จบ
     const unfinished = this.lines.find((l) => l.t1 > now);
@@ -385,40 +521,6 @@ export class ChantEngine {
       return false;
     });
     this.nextTime = now + 0.35;
-    chantStore.set({ status: "paused" });
-  }
-
-  toggle() {
-    if (this.running) this.pause();
-    else this.resume();
-  }
-
-  setVolume(v: number) {
-    const now = this.ctx.currentTime;
-    this.chantOut.gain.setTargetAtTime(CHANT_LEVEL * v, now, 0.1);
-    this.ambientOut.gain.setTargetAtTime(v, now, 0.1);
-  }
-
-  private async loadFile(): Promise<AudioBuffer | null> {
-    try {
-      const res = await fetch(FILE_URL);
-      const type = res.headers.get("content-type") ?? "";
-      if (!res.ok || !type.startsWith("audio")) return null;
-      return await this.ctx.decodeAudioData(await res.arrayBuffer());
-    } catch {
-      return null;
-    }
-  }
-
-  private playFile(t: number) {
-    if (!this.fileBuffer) return;
-    const src = this.ctx.createBufferSource();
-    src.buffer = this.fileBuffer;
-    src.loop = true;
-    src.connect(this.chantBus);
-    src.start(t, this.fileOffset % this.fileBuffer.duration);
-    this.fileSource = src;
-    this.fileStartedAt = t;
   }
 
   private silence(now: number) {
@@ -426,7 +528,6 @@ export class ChantEngine {
       p.cancelScheduledValues(now);
       if (target !== undefined) p.setTargetAtTime(target, now, 0.06);
     };
-    hold(this.env.gain, 0);
     hold(this.noiseGain.gain, 0);
     hold(this.noiseFilter.frequency);
     for (const f of this.formants) {
@@ -434,6 +535,7 @@ export class ChantEngine {
       hold(f.gain.gain);
     }
     for (const v of this.voices) {
+      hold(v.env.gain, 0);
       hold(v.osc.frequency);
       hold(v.gain.gain, v.level);
     }
@@ -463,6 +565,10 @@ export class ChantEngine {
   private scheduleLine(section: number, line: number, t0: number) {
     const words = PARSED[section][line];
     const total = words.reduce((n, w) => n + w.length, 0);
+    // พระแต่ละรูปตามผู้นำช้าเร็วไม่เท่ากัน ทำให้เสียงหมู่ฟังเป็นธรรมชาติ
+    this.voices.forEach((v, k) => {
+      v.lag = k === 0 || k === this.voices.length - 1 ? 0 : 0.006 + Math.random() * 0.03;
+    });
     // บรรทัดแรกของแต่ละบท พระผู้นำสวดขึ้นต้นคำแรกคนเดียวก่อน
     const solo = line === 0;
     if (solo) this.setSolo(true, t0 - 0.05);
@@ -476,7 +582,7 @@ export class ChantEngine {
         idx++;
         const isFirst = idx === 1;
         const isLast = idx === total;
-        let d = (s.long ? LONG : SHORT) * (0.97 + Math.random() * 0.06);
+        let d = (s.long ? LONG : SHORT) * (0.95 + Math.random() * 0.1);
         if (isLast) d *= 1.9;
         let semi = (s.long ? -0.15 : 0.1) + (Math.random() - 0.5) * 0.25;
         if (isFirst) semi -= 0.6;
@@ -497,6 +603,11 @@ export class ChantEngine {
     return t;
   }
 
+  /** ตั้ง envelope ของพระทุกรูป โดยแต่ละรูปเลื่อนเวลาตาม lag ของตัวเอง */
+  private envTo(value: number, t: number, tau: number) {
+    for (const v of this.voices) v.env.gain.setTargetAtTime(value, t + v.lag, tau);
+  }
+
   private scheduleSyllable(
     s: Syllable,
     t: number,
@@ -505,7 +616,6 @@ export class ChantEngine {
     isFirst: boolean,
     isLast: boolean,
   ) {
-    const env = this.env.gain;
     const ng = this.noiseGain.gain;
     const nf = this.noiseFilter.frequency;
     let vowelStart: number;
@@ -513,7 +623,7 @@ export class ChantEngine {
     this.setPitch(semi, t, 0.035);
     switch (s.onset) {
       case "stop": {
-        env.setTargetAtTime(0, t, 0.008);
+        this.envTo(0, t, 0.008);
         const burst = t + 0.045;
         nf.setValueAtTime(s.burstHz, burst);
         ng.setValueAtTime(0, burst);
@@ -524,18 +634,18 @@ export class ChantEngine {
       }
       case "nasal":
         this.setFormants(NASAL, t, 0.01, true);
-        env.setTargetAtTime(0.55, t, 0.015);
+        this.envTo(0.55, t, 0.015);
         vowelStart = t + 0.06;
         break;
       case "s":
-        env.setTargetAtTime(0, t, 0.012);
+        this.envTo(0, t, 0.012);
         nf.setValueAtTime(6000, t);
         ng.setTargetAtTime(0.16, t + 0.01, 0.015);
         ng.setTargetAtTime(0, t + 0.09, 0.012);
         vowelStart = t + 0.1;
         break;
       case "h":
-        env.setTargetAtTime(0.15, t, 0.015);
+        this.envTo(0.15, t, 0.015);
         nf.setValueAtTime(1600, t);
         ng.setTargetAtTime(0.08, t, 0.015);
         ng.setTargetAtTime(0, t + 0.05, 0.015);
@@ -543,25 +653,25 @@ export class ChantEngine {
         break;
       case "glide":
         this.setFormants(s.glide!, t, 0.012);
-        env.setTargetAtTime(0.6, t, 0.02);
+        this.envTo(0.6, t, 0.02);
         vowelStart = t + 0.055;
         break;
       default:
-        env.setTargetAtTime(isFirst ? 0 : 0.45, t, 0.01);
+        this.envTo(isFirst ? 0 : 0.45, t, 0.01);
         vowelStart = t + 0.025;
     }
 
     this.setFormants(s.vowel, vowelStart - 0.01, 0.02);
-    env.setTargetAtTime(1, vowelStart, 0.018);
+    this.envTo(1, vowelStart, 0.018);
 
     if (s.coda === "nasal") {
       const c = t + d * 0.62;
       this.setFormants(NASAL, c, 0.02, true);
-      env.setTargetAtTime(0.7, c, 0.02);
+      this.envTo(0.7, c, 0.02);
     } else if (s.coda === "stop") {
-      env.setTargetAtTime(0, t + d * 0.72, 0.01);
+      this.envTo(0, t + d * 0.72, 0.01);
     }
-    if (isLast) env.setTargetAtTime(0, t + d - 0.04, 0.06);
+    if (isLast) this.envTo(0, t + d - 0.04, 0.06);
   }
 
   private setFormants(f: Formant, t: number, tau: number, nasal = false) {
@@ -577,7 +687,10 @@ export class ChantEngine {
 
   private setPitch(semi: number, t: number, tau: number) {
     const f = F0 * Math.pow(2, semi / 12);
-    for (const v of this.voices) v.osc.frequency.setTargetAtTime(f * v.ratio, t, tau);
+    for (const v of this.voices) {
+      const drift = 1 + (Math.random() - 0.5) * 0.008;
+      v.osc.frequency.setTargetAtTime(f * v.ratio * drift, t + v.lag, tau);
+    }
   }
 
   private setSolo(solo: boolean, t: number) {
@@ -585,6 +698,8 @@ export class ChantEngine {
       if (k > 0) v.gain.gain.setTargetAtTime(solo ? 0 : v.level, t, 0.05);
     });
   }
+
+  // ---------- ระฆังและบรรยากาศ ----------
 
   private ringBell(t: number, strength: number) {
     const ctx = this.ctx;
@@ -679,7 +794,7 @@ export class ChantEngine {
     for (const v of this.levelData) sum += v * v;
     const target = Math.min(1, Math.sqrt(sum / this.levelData.length) * 5);
     audioLevel.chant += (target - audioLevel.chant) * 0.35;
-    if (!this.fileBuffer) this.updateSnapshot(this.ctx.currentTime);
+    if (this.mode === "synth") this.updateSnapshot(this.ctx.currentTime);
   };
 
   private updateSnapshot(now: number) {

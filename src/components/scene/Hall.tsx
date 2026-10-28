@@ -28,6 +28,8 @@ import { latheGeometry } from "./shapes";
 const W = HALL.halfWidth * 2;
 const BEAM_Y = HALL.height - 0.225;
 const MURAL_WIDTH = (1024 / 1600) * HALL.height;
+// ค่าคงที่นอก component: MeshReflectorMaterial สร้าง render target ใหม่ถ้า array เปลี่ยน
+const REFLECT_BLUR: [number, number] = [400, 120];
 
 function capitalGeometry() {
   const parts: THREE.BufferGeometry[] = [
@@ -235,7 +237,7 @@ function Lamp({ x, z }: { x: number; z: number }) {
   );
 }
 
-export function Hall() {
+export function Hall({ reflect = true }: { reflect?: boolean }) {
   const m = getMaterials();
   const tex = useMemo(
     () => ({
@@ -253,9 +255,10 @@ export function Hall() {
     <group>
       <mesh rotation-x={-Math.PI / 2} position={[0, 0, HALL_CENTER_Z]} receiveShadow>
         <planeGeometry args={[W, HALL_LENGTH]} />
-        <MeshReflectorMaterial
+        {!reflect && <meshStandardMaterial map={tex.floor} roughness={0.35} metalness={0.1} />}
+        {reflect && <MeshReflectorMaterial
           map={tex.floor}
-          blur={[400, 120]}
+          blur={REFLECT_BLUR}
           resolution={512}
           mixBlur={1}
           mixStrength={1.6}
@@ -266,7 +269,7 @@ export function Hall() {
           minDepthThreshold={0.4}
           maxDepthThreshold={1.3}
           mirror={0}
-        />
+        />}
       </mesh>
       <mesh rotation-x={-Math.PI / 2} position={[0, 0.006, 4.5]} receiveShadow>
         <planeGeometry args={[2.4, 14]} />

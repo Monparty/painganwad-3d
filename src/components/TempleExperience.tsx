@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { CHANTS } from "@/lib/audio/chants";
 import { getChantEngine } from "@/lib/audio/engine";
 import { chantStore, type ChantSnapshot } from "@/lib/audio/store";
+import { RECORDING } from "@/lib/audio/recording";
 import { BOW_COUNT, BOW_TIME, requestBow } from "@/lib/bow";
 import styles from "./TempleExperience.module.css";
 
@@ -32,13 +33,26 @@ function Ornament({ className }: { className?: string }) {
   );
 }
 
+function Credit() {
+  return (
+    <p className={styles.credit}>
+      เสียง: <a href={RECORDING.sourceUrl} target="_blank" rel="noopener noreferrer">{RECORDING.title}</a>{" "}
+      {RECORDING.place} · {RECORDING.credit} ·{" "}
+      <a href={RECORDING.licenseUrl} target="_blank" rel="noopener noreferrer">{RECORDING.license}</a> ·{" "}
+      {RECORDING.changes}
+    </p>
+  );
+}
+
 function Subtitles({ chant }: { chant: ChantSnapshot }) {
   const section = CHANTS[chant.section];
-  if (chant.mode === "file") {
+  if (chant.mode === "recording") {
     return (
       <div className={styles.subtitles}>
-        <p className={styles.sectionTitle}>บทสวดมนต์</p>
-        <p className={styles.meaning}>กำลังเล่นเสียงสวดจากไฟล์ public/audio/chant.mp3</p>
+        <p className={styles.sectionTitle}>{RECORDING.title}</p>
+        <p className={styles.recordingTitle}>เสียงสวดจริง · {RECORDING.place}</p>
+        <p className={styles.meaning}>{RECORDING.meaning}</p>
+        <Credit />
       </div>
     );
   }
@@ -142,6 +156,25 @@ export default function TempleExperience() {
               <span>พระอุโบสถ</span>
             </div>
             <nav className={styles.actions}>
+              {chant.recordingAvailable && (
+                <div className={styles.modeSwitch} role="group" aria-label="แหล่งเสียงสวด">
+                  {(
+                    [
+                      ["recording", "เสียงจริง"],
+                      ["synth", "บทสวด+คำอ่าน"],
+                    ] as const
+                  ).map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      className={chant.mode === mode ? styles.modeOn : styles.modeOff}
+                      aria-pressed={chant.mode === mode}
+                      onClick={() => getChantEngine().setMode(mode)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <button className={styles.bow} onClick={bow} disabled={bowing}>
                 {bowing ? "กำลังกราบ…" : "กราบพระ"}
               </button>

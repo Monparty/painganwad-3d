@@ -1,11 +1,12 @@
 "use client";
 
-import { Environment, Lightformer, Sparkles } from "@react-three/drei";
+import { Environment, Lightformer } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { Bloom, EffectComposer, ToneMapping, Vignette } from "@react-three/postprocessing";
 import { ToneMappingMode } from "postprocessing";
-import { Suspense, useState } from "react";
+import { memo, Suspense, useState } from "react";
 import * as THREE from "three";
+import { Dust } from "./scene/Dust";
 import { Hall } from "./scene/Hall";
 import { ALTAR_Z, MONK_SEAT, MONK_Z, SUN_DIR, VIEWER, type V3 } from "./scene/layout";
 import { LightShafts } from "./scene/LightShafts";
@@ -82,13 +83,19 @@ function Reflections() {
   );
 }
 
-export default function TempleScene({
+// UI ด้านบนเปลี่ยนสถานะหลายครั้งต่อวินาที (คำบรรยาย) ไม่ต้อง re-render ฉาก 3 มิติตาม
+export default memo(function TempleScene({
   active,
   onLook,
 }: {
   active: boolean;
   onLook?: () => void;
 }) {
+  // ปิดเอฟเฟกต์ทีละอย่างเพื่อหาปัญหาภาพ เช่น ?fx=0&reflect=0&shafts=0&monks=0
+  const [off] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return (key: string) => params.get(key) === "0";
+  });
   return (
     <Canvas
       shadows
@@ -101,29 +108,22 @@ export default function TempleScene({
       <Suspense fallback={null}>
         <Lights />
         <Reflections />
-        <Hall />
+        <Hall reflect={!off("reflect")} />
         <Shrine />
-        <Monks />
+        {!off("monks") && <Monks />}
         <Offering />
-        <LightShafts />
-        <Sparkles
-          count={160}
-          scale={[13, 6, 22]}
-          position={[0, 3.2, -1]}
-          size={2}
-          speed={0.12}
-          opacity={0.35}
-          color="#ffdcae"
-          noise={0.6}
-        />
+        {!off("shafts") && <LightShafts />}
+        <Dust count={160} box={[13, 6, 22]} position={[0, 3.2, -1]} />
         <SpatialAudio position={[0, MONK_SEAT + 0.7, MONK_Z]} />
-        <EffectComposer multisampling={4}>
-          <Bloom mipmapBlur luminanceThreshold={0.85} luminanceSmoothing={0.2} intensity={0.75} radius={0.75} />
-          <Vignette offset={0.28} darkness={0.75} />
-          <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-        </EffectComposer>
+        {!off("fx") && (
+          <EffectComposer multisampling={4}>
+            <Bloom mipmapBlur luminanceThreshold={0.85} luminanceSmoothing={0.2} intensity={0.75} radius={0.75} />
+            <Vignette offset={0.28} darkness={0.75} />
+            <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
+          </EffectComposer>
+        )}
       </Suspense>
       <LookControls enabled={active} onInteract={onLook} />
     </Canvas>
   );
-}
+});
