@@ -1,36 +1,34 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ไปวัด 3D
 
-## Getting Started
-
-First, run the development server:
+นั่งในพระอุโบสถแบบสามมิติ หันมองรอบตัว และฟังพระสงฆ์ 5 รูปสวดมนต์ตรงหน้า
+สร้างด้วย Next.js + three.js (React Three Fiber)
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev     # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## การควบคุม
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- ลากเมาส์ / นิ้ว หรือปุ่มลูกศร (A/D/W/S) เพื่อหันมอง
+- ล้อเมาส์เพื่อซูม
+- ปุ่ม "กราบพระ" กล้องจะก้มกราบ 3 ครั้ง
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## เสียงสวด
 
-## Learn More
+เสียงสวดสังเคราะห์สดในเบราว์เซอร์ (Web Audio, formant synthesis) ไม่ต้องมีไฟล์เสียง
+บทสวด: นะโม ×3, พุทธคุณ, ธรรมคุณ, สังฆคุณ วนต่อเนื่อง พร้อมคำบรรยายไฮไลต์ทีละคำ
+เสียงมาจากตำแหน่งพระ (HRTF) ใส่หูฟังแล้วหันหัว เสียงจะย้ายข้างตาม
 
-To learn more about Next.js, take a look at the following resources:
+ถ้าต้องการใช้เสียงสวดจริง วางไฟล์ไว้ที่ `public/audio/chant.mp3` ระบบจะเล่นไฟล์นั้นแทนโดยอัตโนมัติ
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## โครงสร้าง
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| ไฟล์ | หน้าที่ |
+| --- | --- |
+| `src/components/TempleExperience.tsx` | หน้าแรก, แถบปุ่ม, คำบรรยายบทสวด |
+| `src/components/TempleScene.tsx` | Canvas, แสง, post-processing |
+| `src/components/scene/*` | โบสถ์, พระประธาน, พระสงฆ์, เทียน/ธูป, แสงแดด, การหันกล้อง |
+| `src/lib/audio/engine.ts` | เสียงสวดสังเคราะห์, ระฆัง, เสียงก้อง, นก |
+| `src/lib/audio/chants.ts` | บทสวด (ไทย + โรมันสำหรับสังเคราะห์) |
+| `src/lib/textures.ts` | ลายไทยวาดด้วย canvas (ลายรดน้ำ, ประจำยาม, ต้นโพธิ์, ดาวเพดาน) |
