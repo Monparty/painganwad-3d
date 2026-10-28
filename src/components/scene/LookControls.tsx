@@ -4,6 +4,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { BOW_COUNT, BOW_TIME, bowAmount, bowState } from "@/lib/bow";
+import { gazeState } from "@/lib/gaze";
 import { VIEWER } from "./layout";
 
 const PITCH_MIN = -0.85;
@@ -121,6 +122,14 @@ export function LookControls({
       const [yaw, pitch] = TURN_KEYS[key];
       s.tYaw += yaw * dt * 1.3;
       s.tPitch += pitch * dt * 0.9;
+    }
+
+    const gaze = gazeState.request;
+    if (gaze) {
+      gazeState.request = null;
+      // หมุนทางที่ใกล้ที่สุด
+      s.tYaw = gaze.yaw + Math.round((s.tYaw - gaze.yaw) / TAU) * TAU;
+      s.tPitch = gaze.pitch;
     }
 
     let bow = 0;

@@ -67,6 +67,20 @@
   text-shadow: 0 0 48px rgba(226, 182, 90, 0.35);
 }
 
+.subtitle {
+  margin-top: -14px;
+  font-family: var(--font-serif);
+  font-size: 15px;
+  letter-spacing: 0.14em;
+  color: var(--gold);
+}
+
+.introLang {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  right: 16px;
+}
+
 .tagline {
   font-family: var(--font-serif);
   font-size: clamp(16px, 2.2vw, 19px);
@@ -131,10 +145,22 @@
   color: var(--gold-soft);
 }
 
+.brand .iconButton {
+  pointer-events: auto;
+  margin-right: 4px;
+}
+
 .brandMark {
   width: 22px;
   height: 22px;
   fill: var(--gold);
+}
+
+/* ซ่อนแถบบนและคำบรรยายระหว่างนั่งสมาธิหรือก่อนนอน */
+.away {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 1.2s ease;
 }
 
 .actions {
@@ -220,16 +246,6 @@
   width: 40px;
   height: 40px;
   border-radius: 50%;
-}
-
-.icon {
-  width: 20px;
-  height: 20px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* ---------- คำบรรยายบทสวด ---------- */
@@ -417,5 +433,12 @@
     white-space: normal;
     width: calc(100% - 32px);
     text-align: center;
+  }
+}
+
+/* จอแคบ: ย้ายตัวเลือกแหล่งเสียงไปไว้ในเมนู แถบบนจะได้อยู่บรรทัดเดียว */
+@media (max-width: 640px) {
+  .actions .modeSwitch {
+    display: none;
   }
 }

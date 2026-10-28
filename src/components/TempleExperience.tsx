@@ -1,22 +1,35 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import { CHANTS } from "@/lib/audio/chants";
+import { useCallback, useEffect, useState } from "react";
+import { CHANTS, paliWords } from "@/lib/audio/chants";
 import { getChantEngine } from "@/lib/audio/engine";
-import { chantStore, type ChantSnapshot } from "@/lib/audio/store";
+import { chantStore, useChant, type ChantSnapshot } from "@/lib/audio/store";
 import { RECORDING } from "@/lib/audio/recording";
 import { BOW_COUNT, BOW_TIME, requestBow } from "@/lib/bow";
+import { requestGaze } from "@/lib/gaze";
+import { langStore, useLang, useT, UI, type Lang } from "@/lib/i18n";
+import { sleepFadeSeconds, type Practice } from "@/lib/practice";
+import { Etiquette } from "./Etiquette";
+import { Fortune } from "./Fortune";
+import { Icon } from "./Icon";
+import { Menu } from "./Menu";
+import { MeditationOverlay, SleepOverlay } from "./Practice";
 import styles from "./TempleExperience.module.css";
+
+function Loading() {
+  return <div className={styles.loading}>{useT().loading}</div>;
+}
 
 const TempleScene = dynamic(() => import("./TempleScene"), {
   ssr: false,
-  loading: () => <div className={styles.loading}>กำลังเปิดประตูโบสถ์…</div>,
+  loading: () => <Loading />,
 });
 
-function useChant(): ChantSnapshot {
-  return useSyncExternalStore(chantStore.subscribe, chantStore.get, chantStore.get);
-}
+/** มองพานดอกไม้ธูปเทียนตรงหน้า (ซ้ายมือเล็กน้อย) */
+const OFFERING_GAZE = { yaw: 0.36, pitch: -0.85 };
+
+type Panel = "fortune" | "etiquette" | null;
 
 function Ornament({ className }: { className?: string }) {
   return (
@@ -33,35 +46,67 @@ function Ornament({ className }: { className?: string }) {
   );
 }
 
-function Credit() {
+function LangSwitch({ lang, className }: { lang: Lang; className?: string }) {
+  return (
+    <div className={`${styles.modeSwitch} ${className ?? ""}`} role="group" aria-label={UI[lang].language}>
+      {(
+        [
+          ["th", "ไทย"],
+          ["en", "EN"],
+        ] as [Lang, string][]
+      ).map(([l, label]) => (
+        <button
+          key={l}
+          lang={l}
+          className={lang === l ? styles.modeOn : styles.modeOff}
+          aria-pressed={lang === l}
+          onClick={() => langStore.set(l)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Credit({ lang }: { lang: Lang }) {
   return (
     <p className={styles.credit}>
-      เสียง: <a href={RECORDING.sourceUrl} target="_blank" rel="noopener noreferrer">{RECORDING.title}</a>{" "}
-      {RECORDING.place} · {RECORDING.credit} ·{" "}
-      <a href={RECORDING.licenseUrl} target="_blank" rel="noopener noreferrer">{RECORDING.license}</a> ·{" "}
-      {RECORDING.changes}
+      {UI[lang].audio}:{" "}
+      <a href={RECORDING.sourceUrl} target="_blank" rel="noopener noreferrer">
+        {RECORDING.title[lang]}
+      </a>{" "}
+      {RECORDING.place[lang]} · {RECORDING.credit[lang]} ·{" "}
+      <a href={RECORDING.licenseUrl} target="_blank" rel="noopener noreferrer">
+        {RECORDING.license}
+      </a>{" "}
+      · {RECORDING.changes[lang]}
     </p>
   );
 }
 
-function Subtitles({ chant }: { chant: ChantSnapshot }) {
-  const section = CHANTS[chant.section];
+function Subtitles({ chant, lang, hidden }: { chant: ChantSnapshot; lang: Lang; hidden: boolean }) {
+  const t = UI[lang];
+  const cls = `${styles.subtitles} ${hidden ? styles.away : ""}`;
   if (chant.mode === "recording") {
     return (
-      <div className={styles.subtitles}>
-        <p className={styles.sectionTitle}>{RECORDING.title}</p>
-        <p className={styles.recordingTitle}>เสียงสวดจริง · {RECORDING.place}</p>
-        <p className={styles.meaning}>{RECORDING.meaning}</p>
-        <Credit />
+      <div className={cls}>
+        <p className={styles.sectionTitle}>{RECORDING.title[lang]}</p>
+        <p className={styles.recordingTitle}>
+          {t.recordingLabel} · {RECORDING.place[lang]}
+        </p>
+        <p className={styles.meaning}>{RECORDING.meaning[lang]}</p>
+        <Credit lang={lang} />
       </div>
     );
   }
+  const section = CHANTS[chant.section];
   const line = section.lines[chant.line];
-  const words = line.thai.split(" ");
+  const words = lang === "th" ? line.thai.split(" ") : paliWords(line);
   const next = section.lines[chant.line + 1];
   return (
-    <div className={styles.subtitles} aria-live="polite">
-      <p className={styles.sectionTitle}>{section.title}</p>
+    <div className={cls} aria-live="polite">
+      <p className={styles.sectionTitle}>{section.title[lang]}</p>
       <p className={styles.line} key={`${chant.section}:${chant.line}`}>
         {words.map((w, i) => (
           <span
@@ -74,26 +119,11 @@ function Subtitles({ chant }: { chant: ChantSnapshot }) {
           </span>
         ))}
       </p>
-      <p className={styles.nextLine}>{next ? next.thai : " "}</p>
-      <p className={styles.meaning}>{section.meaning}</p>
+      <p className={styles.nextLine}>
+        {next ? (lang === "th" ? next.thai : paliWords(next).join(" ")) : " "}
+      </p>
+      <p className={styles.meaning}>{section.meaning[lang]}</p>
     </div>
-  );
-}
-
-function Icon({ name }: { name: "pause" | "play" | "sound" | "mute" | "expand" }) {
-  const paths = {
-    pause: <path d="M7 5h3v14H7zM14 5h3v14h-3z" />,
-    play: <path d="M8 5v14l11-7z" />,
-    sound: (
-      <path d="M4 9h4l5-4v14l-5-4H4zM16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" />
-    ),
-    mute: <path d="M4 9h4l5-4v14l-5-4H4zM17 9l5 6M22 9l-5 6" />,
-    expand: <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />,
-  };
-  return (
-    <svg viewBox="0 0 24 24" className={styles.icon} aria-hidden>
-      {paths[name]}
-    </svg>
   );
 }
 
@@ -102,7 +132,17 @@ export default function TempleExperience() {
   const [looked, setLooked] = useState(false);
   const [muted, setMuted] = useState(false);
   const [bowing, setBowing] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [panel, setPanel] = useState<Panel>(null);
+  const [practice, setPractice] = useState<Practice | null>(null);
+  const [asleep, setAsleep] = useState(false);
   const chant = useChant();
+  const lang = useLang();
+  const t = UI[lang];
+
+  useEffect(() => {
+    document.documentElement.lang = lang;
+  }, [lang]);
 
   const enter = () => {
     getChantEngine().start();
@@ -131,37 +171,85 @@ export default function TempleExperience() {
   };
 
   const onLook = useCallback(() => setLooked(true), []);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  const closePanel = useCallback(() => setPanel(null), []);
+
+  const startSleep = (minutes: number) => {
+    const engine = getChantEngine();
+    const total = minutes * 60;
+    const fade = sleepFadeSeconds(minutes);
+    engine.resume();
+    engine.fadeTo(0, fade, total - fade);
+    setMenuOpen(false);
+    setPractice({ kind: "sleep", minutes, startedAt: Date.now() });
+  };
+
+  const startMeditation = (minutes: number, withChant: boolean) => {
+    const engine = getChantEngine();
+    const resumeAfter = !withChant && chantStore.get().status === "chanting";
+    if (withChant) engine.resume();
+    else engine.pause();
+    engine.chime(1);
+    setMenuOpen(false);
+    setPractice({ kind: "meditate", minutes, startedAt: Date.now(), withChant, resumeAfter });
+  };
+
+  const endPractice = () => {
+    const engine = getChantEngine();
+    if (practice?.kind === "sleep") engine.fadeTo(1, 1.5);
+    if (practice?.kind === "meditate" && practice.resumeAfter) engine.resume();
+    setAsleep(false);
+    setPractice(null);
+  };
+
+  const openPanel = (p: Exclude<Panel, null>) => {
+    setMenuOpen(false);
+    setPanel(p);
+  };
+
+  const away = practice !== null;
 
   return (
     <main className={styles.root}>
       <div className={styles.canvas}>
-        <TempleScene active={entered} onLook={onLook} />
+        <TempleScene active={entered && !away} asleep={asleep} onLook={onLook} />
       </div>
 
       <div className={`${styles.intro} ${entered ? styles.introGone : ""}`} aria-hidden={entered}>
+        <LangSwitch lang={lang} className={styles.introLang} />
         <Ornament className={styles.ornament} />
-        <h1 className={styles.title}>ไปวัด</h1>
-        <p className={styles.tagline}>ถอดรองเท้าไว้หน้าโบสถ์ แล้วนั่งพับเพียบฟังพระสวดมนต์</p>
+        <h1 className={styles.title}>{t.title}</h1>
+        {t.subtitle && <p className={styles.subtitle}>{t.subtitle}</p>}
+        <p className={styles.tagline}>{t.tagline}</p>
         <button className={styles.enter} onClick={enter} disabled={entered}>
-          เข้าพระอุโบสถ
+          {t.enter}
         </button>
-        <p className={styles.note}>ใส่หูฟังจะได้ยินเสียงสวดรอบทิศ · ลากเพื่อหันมองซ้ายขวา</p>
+        <p className={styles.note}>{t.note}</p>
       </div>
 
       {entered && (
         <>
-          <header className={styles.top}>
+          <header className={`${styles.top} ${away ? styles.away : ""}`} inert={away}>
             <div className={styles.brand}>
+              <button
+                className={styles.iconButton}
+                onClick={() => setMenuOpen(true)}
+                aria-label={t.menu}
+                aria-expanded={menuOpen}
+                title={t.menu}
+              >
+                <Icon name="menu" />
+              </button>
               <Ornament className={styles.brandMark} />
-              <span>พระอุโบสถ</span>
+              <span>{t.brand}</span>
             </div>
             <nav className={styles.actions}>
               {chant.recordingAvailable && (
-                <div className={styles.modeSwitch} role="group" aria-label="แหล่งเสียงสวด">
+                <div className={styles.modeSwitch} role="group" aria-label={t.chantSource}>
                   {(
                     [
-                      ["recording", "เสียงจริง"],
-                      ["synth", "บทสวด+คำอ่าน"],
+                      ["recording", t.modeRecording],
+                      ["synth", t.modeSynth],
                     ] as const
                   ).map(([mode, label]) => (
                     <button
@@ -176,35 +264,62 @@ export default function TempleExperience() {
                 </div>
               )}
               <button className={styles.bow} onClick={bow} disabled={bowing}>
-                {bowing ? "กำลังกราบ…" : "กราบพระ"}
+                {bowing ? t.bowing : t.bow}
               </button>
               <button
                 className={styles.iconButton}
                 onClick={() => getChantEngine().toggle()}
-                aria-label={chant.status === "chanting" ? "หยุดสวด" : "สวดต่อ"}
-                title={chant.status === "chanting" ? "หยุดสวด" : "สวดต่อ"}
+                aria-label={chant.status === "chanting" ? t.pause : t.resume}
+                title={chant.status === "chanting" ? t.pause : t.resume}
               >
                 <Icon name={chant.status === "chanting" ? "pause" : "play"} />
               </button>
               <button
                 className={styles.iconButton}
                 onClick={toggleMute}
-                aria-label={muted ? "เปิดเสียง" : "ปิดเสียง"}
-                title={muted ? "เปิดเสียง" : "ปิดเสียง"}
+                aria-label={muted ? t.unmute : t.mute}
+                title={muted ? t.unmute : t.mute}
               >
                 <Icon name={muted ? "mute" : "sound"} />
               </button>
-              <button className={styles.iconButton} onClick={fullscreen} aria-label="เต็มจอ" title="เต็มจอ">
+              <button className={styles.iconButton} onClick={fullscreen} aria-label={t.fullscreen} title={t.fullscreen}>
                 <Icon name="expand" />
               </button>
             </nav>
           </header>
 
-          <Subtitles chant={chant} />
+          <Subtitles chant={chant} lang={lang} hidden={away} />
 
-          <p className={`${styles.hint} ${looked ? styles.hintGone : ""}`}>
-            ลากเพื่อหันมอง · ปุ่มลูกศร ← → · ล้อเมาส์เพื่อซูม
-          </p>
+          <p className={`${styles.hint} ${looked || away ? styles.hintGone : ""}`}>{t.hint}</p>
+
+          {practice?.kind === "sleep" && (
+            <SleepOverlay practice={practice} onAsleep={() => setAsleep(true)} onExit={endPractice} />
+          )}
+          {practice?.kind === "meditate" && <MeditationOverlay practice={practice} onExit={endPractice} />}
+
+          <Menu
+            open={menuOpen}
+            onClose={closeMenu}
+            onSleep={startSleep}
+            onMeditate={startMeditation}
+            onFortune={() => openPanel("fortune")}
+            onEtiquette={() => openPanel("etiquette")}
+          />
+
+          {panel === "fortune" && <Fortune onClose={closePanel} />}
+          {panel === "etiquette" && (
+            <Etiquette
+              onClose={closePanel}
+              onBow={() => {
+                setPanel(null);
+                bow();
+              }}
+              onLookOffering={() => {
+                setPanel(null);
+                requestGaze(OFFERING_GAZE.yaw, OFFERING_GAZE.pitch);
+              }}
+            />
+          )}
         </>
       )}
     </main>

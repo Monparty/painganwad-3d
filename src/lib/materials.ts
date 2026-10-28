@@ -17,6 +17,19 @@ function create() {
   return {
     gold: new THREE.MeshStandardMaterial({ color: "#e8b54a", metalness: 1, roughness: 0.28 }),
     goldDim: new THREE.MeshStandardMaterial({ color: "#c08a2c", metalness: 1, roughness: 0.42 }),
+    silver: new THREE.MeshStandardMaterial({
+      color: "#d8d2c8",
+      metalness: 1,
+      roughness: 0.22,
+      side: THREE.DoubleSide,
+    }),
+    water: new THREE.MeshStandardMaterial({
+      color: "#a9bcc4",
+      metalness: 0.7,
+      roughness: 0.05,
+      transparent: true,
+      opacity: 0.82,
+    }),
     buddhaGold: new THREE.MeshStandardMaterial({
       color: "#f4c65a",
       metalness: 1,

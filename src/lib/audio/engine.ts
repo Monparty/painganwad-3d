@@ -182,8 +182,13 @@ export class ChantEngine {
   readonly ambientOut: GainNode;
 
   private readonly chantBus: GainNode;
+  /** เสียงบรรยากาศทั้งหมดรวมกันที่นี่ก่อนผ่าน fade → ambientOut */
+  private readonly ambientIn: GainNode;
+  /** ค่อยๆ เบาเสียงลง (โหมดก่อนนอน) แยกจากปุ่มปิดเสียงที่คุม chantOut/ambientOut */
+  private readonly fades: GainNode[];
   private readonly reverbSend: GainNode;
   private readonly bellBus: GainNode;
+  private readonly sfxBus: GainNode;
   private readonly analyser: AnalyserNode;
   private readonly levelData = new Float32Array(512);
   private readonly noiseGain: GainNode;
@@ -211,13 +216,20 @@ export class ChantEngine {
     this.chantOut = ctx.createGain();
     this.chantOut.gain.value = CHANT_LEVEL;
     this.ambientOut = ctx.createGain();
+    const chantFade = ctx.createGain();
+    chantFade.connect(this.chantOut);
+    const ambientFade = ctx.createGain();
+    ambientFade.connect(this.ambientOut);
+    this.fades = [chantFade, ambientFade];
+    this.ambientIn = ctx.createGain();
+    this.ambientIn.connect(ambientFade);
 
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -18;
     comp.ratio.value = 3;
     comp.attack.value = 0.01;
     comp.release.value = 0.25;
-    comp.connect(this.chantOut);
+    comp.connect(chantFade);
 
     this.chantBus = ctx.createGain();
     this.chantBus.connect(comp);
@@ -234,12 +246,19 @@ export class ChantEngine {
     this.chantBus.connect(this.reverbSend);
     this.reverbSend.connect(convolver);
     convolver.connect(wet);
-    wet.connect(this.ambientOut);
+    wet.connect(this.ambientIn);
 
     this.bellBus = ctx.createGain();
     this.bellBus.gain.value = 0.8;
-    this.bellBus.connect(this.ambientOut);
+    this.bellBus.connect(this.ambientIn);
     this.bellBus.connect(this.reverbSend);
+
+    this.sfxBus = ctx.createGain();
+    this.sfxBus.connect(this.ambientIn);
+    const sfxSend = ctx.createGain();
+    sfxSend.gain.value = 0.3;
+    this.sfxBus.connect(sfxSend);
+    sfxSend.connect(this.reverbSend);
 
     // ---------- เสียงสวดจริง ----------
     this.audio = new Audio();
@@ -377,7 +396,7 @@ export class ChantEngine {
     roomGain.gain.value = 0.025;
     room.connect(roomLp);
     roomLp.connect(roomGain);
-    roomGain.connect(this.ambientOut);
+    roomGain.connect(this.ambientIn);
     room.start();
   }
 
@@ -465,6 +484,75 @@ export class ChantEngine {
     const now = this.ctx.currentTime;
     this.chantOut.gain.setTargetAtTime(CHANT_LEVEL * v, now, 0.1);
     this.ambientOut.gain.setTargetAtTime(v, now, 0.1);
+  }
+
+  /** ไล่ระดับเสียงทั้งหมดไปที่ target ใน seconds วินาที หลังรอ delay วินาที (ตั้งเวลาบนนาฬิกาเสียง จึงยังทำงานแม้แท็บถูกพัก) */
+  fadeTo(target: number, seconds: number, delay = 0) {
+    const now = this.ctx.currentTime;
+    for (const { gain } of this.fades) {
+      const from = gain.value;
+      gain.cancelScheduledValues(now);
+      gain.setValueAtTime(from, now);
+      gain.setValueAtTime(from, now + delay);
+      gain.linearRampToValueAtTime(target, now + delay + Math.max(0.05, seconds));
+    }
+  }
+
+  /** ข้ามไปสวดบทที่เลือกด้วยเสียงสังเคราะห์ แล้วสวดบทถัดไปต่อเนื่อง */
+  playSection(section: number) {
+    if (!this.started) return;
+    if (this.running) this.pause();
+    this.mode = "synth";
+    this.cursor = { section, line: 0 };
+    this.words = [];
+    this.lines = [];
+    const now = this.ctx.currentTime;
+    this.nextTime = now + 1.6;
+    chantStore.set({ mode: "synth", section, line: 0, word: -1 });
+    this.ringBell(now + 0.05, 0.6);
+    this.resume();
+  }
+
+  /** กลับไปฟังเสียงสวดจริง */
+  playRecording() {
+    this.setMode("recording");
+    this.resume();
+  }
+
+  /** ตีระฆังติดกัน n ครั้ง (เริ่มและจบการนั่งสมาธิ) */
+  chime(times = 1) {
+    const t = this.ctx.currentTime + 0.05;
+    for (let i = 0; i < times; i++) this.ringBell(t + i * 2.6, 1 - i * 0.12);
+  }
+
+  /** เสียงไม้เซียมซีกระทบกันในกระบอก */
+  rattle(seconds: number) {
+    let t = this.ctx.currentTime + 0.02;
+    const end = t + seconds;
+    while (t < end) {
+      this.clack(t, 0.2 + Math.random() * 0.5, 900 + Math.random() * 1500);
+      t += 0.025 + Math.random() * 0.06;
+    }
+  }
+
+  /** ไม้กระทบกันหนึ่งครั้ง เช่น ไม้เซียมซีหล่นถึงพื้น */
+  clack(t = this.ctx.currentTime + 0.02, strength = 1, hz = 1300) {
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = hz;
+    bp.Q.value = 7;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.6 * strength, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.sfxBus);
+    src.start(t, Math.random() * 1.5);
+    src.stop(t + 0.08);
   }
 
   // ---------- เสียงสวดจริง ----------
@@ -765,7 +853,7 @@ export class ChantEngine {
     const out = ctx.createGain();
     out.gain.value = 0.018;
     pan.connect(out);
-    out.connect(this.ambientOut);
+    out.connect(this.ambientIn);
     const base = 2800 + Math.random() * 1600;
     const notes = 2 + Math.floor(Math.random() * 4);
     let st = t;

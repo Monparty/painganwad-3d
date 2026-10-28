@@ -4,19 +4,19 @@ import "./globals.css";
 
 const display = Srisakdi({
   variable: "--font-display",
-  subsets: ["thai", "latin"],
+  subsets: ["thai", "latin", "latin-ext"],
   weight: ["400", "700"],
 });
 
 const serif = Noto_Serif_Thai({
   variable: "--font-serif",
-  subsets: ["thai", "latin"],
+  subsets: ["thai", "latin", "latin-ext"],
   weight: ["400", "500", "700"],
 });
 
 const sans = Sarabun({
   variable: "--font-sans",
-  subsets: ["thai", "latin"],
+  subsets: ["thai", "latin", "latin-ext"],
   weight: ["300", "400", "500"],
 });
 

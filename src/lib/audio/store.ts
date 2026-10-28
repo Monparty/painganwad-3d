@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from "react";
+
 export type ChantStatus = "idle" | "chanting" | "paused";
 export type ChantMode = "recording" | "synth";
 
@@ -41,6 +43,10 @@ export const chantStore = {
     };
   },
 };
+
+export function useChant(): ChantSnapshot {
+  return useSyncExternalStore(chantStore.subscribe, chantStore.get, chantStore.get);
+}
 
 /** ระดับเสียงสวด (0..1) อัปเดตทุกเฟรม ใช้ขยับปากพระในฉาก */
 export const audioLevel = { chant: 0 };

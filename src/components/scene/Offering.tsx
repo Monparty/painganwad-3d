@@ -30,7 +30,7 @@ export function Offering() {
   const m = getMaterials();
   const bud = useMemo(() => latheGeometry(BUD, 14), []);
   return (
-    <group position={[0.05, 0.012, VIEWER[2] - 0.62]} rotation-y={0.2}>
+    <group position={[-0.24, 0.012, VIEWER[2] - 0.62]} rotation-y={0.2}>
       <Lathe profile={TRAY} segments={36} material={m.gold} />
       {[-0.05, 0, 0.05].map((x, i) => (
         <group key={i} position={[x, 0.12, -0.02 + i * 0.015]} rotation={[0.9, 0.15 * (i - 1), 0]}>

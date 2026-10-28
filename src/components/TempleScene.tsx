@@ -15,6 +15,7 @@ import { Monks } from "./scene/Monks";
 import { Offering } from "./scene/Offering";
 import { Shrine } from "./scene/Shrine";
 import { SpatialAudio } from "./scene/SpatialAudio";
+import { WaterPouring } from "./scene/WaterPouring";
 
 function Spot({
   position,
@@ -86,9 +87,12 @@ function Reflections() {
 // UI ด้านบนเปลี่ยนสถานะหลายครั้งต่อวินาที (คำบรรยาย) ไม่ต้อง re-render ฉาก 3 มิติตาม
 export default memo(function TempleScene({
   active,
+  asleep = false,
   onLook,
 }: {
   active: boolean;
+  /** จอมืดสนิทแล้ว (จบโหมดก่อนนอน) หยุดวาดภาพเพื่อประหยัดแบตเตอรี่ */
+  asleep?: boolean;
   onLook?: () => void;
 }) {
   // ปิดเอฟเฟกต์ทีละอย่างเพื่อหาปัญหาภาพ เช่น ?fx=0&reflect=0&shafts=0&monks=0
@@ -99,6 +103,7 @@ export default memo(function TempleScene({
   return (
     <Canvas
       shadows
+      frameloop={asleep ? "never" : "always"}
       dpr={[1, 1.75]}
       gl={{ antialias: false, powerPreference: "high-performance" }}
       camera={{ position: VIEWER, fov: 62, near: 0.05, far: 80 }}
@@ -112,6 +117,7 @@ export default memo(function TempleScene({
         <Shrine />
         {!off("monks") && <Monks />}
         <Offering />
+        <WaterPouring />
         {!off("shafts") && <LightShafts />}
         <Dust count={160} box={[13, 6, 22]} position={[0, 3.2, -1]} />
         <SpatialAudio position={[0, MONK_SEAT + 0.7, MONK_Z]} />
