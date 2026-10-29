@@ -178,6 +178,7 @@ export default function TempleExperience() {
     const engine = getChantEngine();
     const total = minutes * 60;
     const fade = sleepFadeSeconds(minutes);
+    engine.stopWaterPouring();
     engine.resume();
     engine.fadeTo(0, fade, total - fade);
     setMenuOpen(false);
@@ -187,6 +188,7 @@ export default function TempleExperience() {
   const startMeditation = (minutes: number, withChant: boolean) => {
     const engine = getChantEngine();
     const resumeAfter = !withChant && chantStore.get().status === "chanting";
+    engine.stopWaterPouring();
     if (withChant) engine.resume();
     else engine.pause();
     engine.chime(1);
@@ -302,7 +304,10 @@ export default function TempleExperience() {
             onClose={closeMenu}
             onSleep={startSleep}
             onMeditate={startMeditation}
-            onFortune={() => openPanel("fortune")}
+            onFortune={() => {
+              getChantEngine().stopWaterPouring();
+              openPanel("fortune");
+            }}
             onEtiquette={() => openPanel("etiquette")}
           />
 

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { CHANTS } from "./chants";
+import { CHANTS, KRUATNAM } from "./chants";
 import { RECORDING } from "./recording";
 import { audioLevel, chantStore, type ChantMode } from "./store";
 
@@ -511,6 +511,18 @@ export class ChantEngine {
     chantStore.set({ mode: "synth", section, line: 0, word: -1 });
     this.ringBell(now + 0.05, 0.6);
     this.resume();
+  }
+
+  /** ถ้ากำลังอยู่ในบทกรวดน้ำ ให้ข้ามไปบทถัดไป (ฉากวางขันน้ำลง) โดยคงสถานะเล่น/หยุดไว้เหมือนเดิม */
+  stopWaterPouring() {
+    if (this.mode !== "synth" || chantStore.get().section !== KRUATNAM) return;
+    const wasRunning = this.running;
+    if (wasRunning) this.pause();
+    this.cursor = { section: (KRUATNAM + 1) % CHANTS.length, line: 0 };
+    this.words = [];
+    this.lines = [];
+    chantStore.set({ section: this.cursor.section, line: 0, word: -1 });
+    if (wasRunning) this.resume();
   }
 
   /** กลับไปฟังเสียงสวดจริง */

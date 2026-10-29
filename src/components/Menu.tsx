@@ -144,7 +144,11 @@ export function Menu({ open, onClose, onSleep, onMeditate, onFortune, onEtiquett
                     <button
                       className={on ? styles.chantOn : styles.chant}
                       aria-current={on}
-                      onClick={() => getChantEngine().playSection(i)}
+                      onClick={() => {
+                        getChantEngine().playSection(i);
+                        // บทกรวดน้ำมีฉากรินน้ำและกล้องก้มมองขัน พับเมนูเก็บให้เห็นฉาก
+                        if (c.id === "kruatnam") onClose();
+                      }}
                     >
                       <span className={styles.chantTitle}>{c.title[lang]}</span>
                       <span className={styles.chantSub}>{lang === "th" ? c.title.en : c.title.th}</span>
